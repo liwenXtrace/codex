@@ -499,6 +499,9 @@ pub struct ConfigToml {
 
     /// Lifecycle hooks configured inline in TOML plus user-level overrides.
     pub hooks: Option<HooksToml>,
+    /// Read-only paths for local command hooks, legacy notifications and stdio MCP processes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub process_read_only_paths: Vec<AbsolutePathBuf>,
 
     /// Default and per-plugin settings keyed by exact `<plugin>@<marketplace>` IDs.
     #[serde(default)]

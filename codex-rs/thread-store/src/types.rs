@@ -67,7 +67,10 @@ pub struct ThreadPersistenceMetadata {
 
 /// Extra configuration fields for a thread.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ExtraConfig {}
+pub struct ExtraConfig {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub process_read_only_paths: Vec<AbsolutePathBuf>,
+}
 
 /// Parameters required to create a persisted thread.
 #[derive(Clone, Debug, Serialize, Deserialize)]

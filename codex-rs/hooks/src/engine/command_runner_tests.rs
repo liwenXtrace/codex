@@ -468,6 +468,121 @@ fn fallback_shell_uses_snapshot() {
     );
 }
 
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn hook_sandbox_preserves_output_and_blocks_descendant_source_writes() {
+    let temp = tempdir().expect("fixture");
+    let source = temp.path().join("source");
+    let branch = temp.path().join("branch");
+    std::fs::create_dir_all(source.join(".git")).unwrap();
+    std::fs::create_dir(&branch).unwrap();
+    std::fs::write(source.join("tracked"), "original").unwrap();
+    std::os::unix::fs::symlink(&source, branch.join("alias")).unwrap();
+    let handler = write_handler(
+        &temp,
+        r#"
+import json, os, subprocess, sys
+from pathlib import Path
+payload=json.load(sys.stdin)
+Path('branch-write').write_text(os.environ['HOOK_TEST_VALUE'])
+for target in ['../source/tracked', '../source/.git/marker', 'alias/tracked']:
+    child=subprocess.run([sys.executable, '-c', 'from pathlib import Path; import sys; Path(sys.argv[1]).write_text("bad")', target], capture_output=True)
+    assert child.returncode != 0 and b'PermissionError' in child.stderr, (target, child.stderr)
+try:
+    os.link('../source/tracked', 'hardlink')
+    raise AssertionError('hardlink escaped protection')
+except PermissionError:
+    pass
+print(payload['expected'])
+"#,
+    );
+    let ConfiguredHandlerKind::Command { command, .. } = &handler.kind else {
+        panic!("command hook");
+    };
+    let (mut runtime, _receiver) = runtime();
+    runtime.read_only_paths = Ok(vec![AbsolutePathBuf::from_absolute_path(&source).unwrap()]);
+    let result = run_command(
+        &runtime,
+        &handler,
+        command,
+        &HashMap::from([("HOOK_TEST_VALUE".into(), "preserved".into())]),
+        r#"{"expected":"hook context preserved"}"#,
+        &branch,
+    )
+    .await;
+    assert_eq!(
+        (result.exit_code, result.error),
+        (Some(0), None),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(result.stdout.trim(), "hook context preserved");
+    assert_eq!(
+        std::fs::read_to_string(branch.join("branch-write")).unwrap(),
+        "preserved"
+    );
+    assert_eq!(
+        std::fs::read_to_string(source.join("tracked")).unwrap(),
+        "original"
+    );
+    assert!(!source.join(".git/marker").exists());
+    let refreshed = runtime.reconfigured(runtime.shell.clone());
+    assert_eq!(refreshed.read_only_paths, runtime.read_only_paths);
+}
+
+#[tokio::test]
+async fn malformed_hook_sandbox_never_executes_the_hook() {
+    let temp = tempdir().expect("fixture");
+    let handler = write_handler(&temp, "from pathlib import Path; Path('ran').touch()");
+    let ConfiguredHandlerKind::Command { command, env, .. } = &handler.kind else {
+        panic!("command hook");
+    };
+    let (mut runtime, _receiver) = runtime();
+    runtime.read_only_paths = Err("invalid hook isolation configuration".into());
+    let result = run_command(&runtime, &handler, command, env, "{}", temp.path()).await;
+    assert!(
+        result
+            .error
+            .unwrap()
+            .contains("hook sandbox preparation failed")
+    );
+    assert!(!temp.path().join("ran").exists());
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn async_hook_keeps_source_protection_after_scheduling() {
+    let temp = tempdir().expect("fixture");
+    let source = temp.path().join("source");
+    std::fs::create_dir(&source).unwrap();
+    let handler = write_handler(
+        &temp,
+        r#"
+import sys
+from pathlib import Path
+sys.stdin.read()
+try:
+    Path('source/forbidden').write_text('bad')
+    raise AssertionError('async hook escaped protection')
+except PermissionError:
+    Path('async-completed').write_text('protected')
+"#,
+    );
+    let (mut runtime, results) = runtime();
+    runtime.read_only_paths = Ok(vec![AbsolutePathBuf::from_absolute_path(&source).unwrap()]);
+    schedule(&runtime, handler, temp.path()).await;
+    let result = timeout(ASYNC_HOOK_TEST_TIMEOUT, results.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(result.run.status, HookRunStatus::Completed);
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("async-completed")).unwrap(),
+        "protected"
+    );
+    assert!(!source.join("forbidden").exists());
+}
+
 const ASYNC_HOOK_TEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn runtime() -> (CommandHookRuntime, Receiver<HookCompletedEvent>) {

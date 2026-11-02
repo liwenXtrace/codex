@@ -5896,6 +5896,7 @@ impl ThreadRequestProcessor {
             thread_response_active_permission_profile(config_snapshot.active_permission_profile);
         let thread_originator = config_snapshot.originator.clone();
         let response = ThreadForkResponse {
+            process_read_only_paths: forked_thread.process_read_only_paths(),
             thread: thread.clone(),
             disabled_plugin_ids: config_snapshot.disabled_plugin_ids,
             model: config_snapshot.model.clone(),

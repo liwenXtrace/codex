@@ -175,6 +175,7 @@ pub(crate) struct McpServerConnectionIdentity {
     pub(crate) oauth_store_was_contended: bool,
     resolved_environment: Result<Option<Arc<Environment>>, String>,
     local_stdio_fallback_cwd: Option<PathBuf>,
+    process_read_only_paths: Vec<codex_config::AbsolutePathBuf>,
     referenced_environment_variables: Vec<(String, Option<OsString>)>,
     runtime_auth: Option<CodexAuth>,
     runtime_auth_token: Option<String>,
@@ -303,6 +304,7 @@ impl McpServerConnectionIdentity {
             oauth_store_was_contended,
             resolved_environment: resolved_environment.clone(),
             local_stdio_fallback_cwd,
+            process_read_only_paths: runtime_context.process_read_only_paths.clone(),
             referenced_environment_variables,
             runtime_auth,
             runtime_auth_token,
@@ -341,6 +343,7 @@ impl McpServerConnectionIdentity {
             && self.oauth_config.as_ref().and_then(|oauth| oauth.client_secret.as_ref())
                 == other.oauth_config.as_ref().and_then(|oauth| oauth.client_secret.as_ref())
             && same_resolved_environment(&self.resolved_environment, &other.resolved_environment)
+            && self.process_read_only_paths == other.process_read_only_paths
             && self.local_stdio_fallback_cwd == other.local_stdio_fallback_cwd
             && self.referenced_environment_variables == other.referenced_environment_variables
             && same_runtime_auth

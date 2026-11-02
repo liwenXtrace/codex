@@ -171,6 +171,7 @@ impl Session {
             local_process_cwd,
         )
         .with_connection_pool(self.services.mcp_manager.connection_pool())
+        .with_process_read_only_paths(self.hooks().command_read_only_paths())
         .with_selected_environments(
             environments.all_selections().into(),
             environments.ready_environment_handles(),

@@ -11,6 +11,7 @@ pub use environment::EnvironmentHookSource;
 pub use environment::HookEnvironmentExecutor;
 mod output_spill;
 mod registry;
+mod sandbox;
 mod schema;
 mod types;
 

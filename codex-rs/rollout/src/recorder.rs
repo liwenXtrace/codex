@@ -115,6 +115,7 @@ pub enum RolloutRecorderParams {
         dynamic_tools: Vec<DynamicToolSpec>,
         selected_capability_roots: Vec<SelectedCapabilityRoot>,
         runtime_workspace_roots: Option<Vec<PathBuf>>,
+        process_read_only_paths: Vec<PathBuf>,
         multi_agent_version: Option<MultiAgentVersion>,
         history_mode: ThreadHistoryMode,
         history_base: Option<HistoryPosition>,
@@ -236,6 +237,7 @@ impl RolloutRecorderParams {
             dynamic_tools,
             selected_capability_roots: Vec::new(),
             runtime_workspace_roots: None,
+            process_read_only_paths: Vec::new(),
             multi_agent_version: None,
             history_mode: Default::default(),
             history_base: None,
@@ -289,6 +291,17 @@ impl RolloutRecorderParams {
         } = &mut self
         {
             *roots = selected_capability_roots;
+        }
+        self
+    }
+
+    pub fn with_process_read_only_paths(mut self, paths: Vec<PathBuf>) -> Self {
+        if let Self::Create {
+            process_read_only_paths,
+            ..
+        } = &mut self
+        {
+            *process_read_only_paths = paths;
         }
         self
     }
@@ -943,6 +956,7 @@ impl RolloutRecorder {
                 dynamic_tools,
                 selected_capability_roots,
                 runtime_workspace_roots,
+                process_read_only_paths,
                 multi_agent_version,
                 history_mode,
                 history_base,
@@ -963,6 +977,7 @@ impl RolloutRecorder {
                     .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))?;
 
                 let session_meta = SessionMeta {
+                    process_read_only_paths,
                     session_id,
                     id: conversation_id,
                     forked_from_id,

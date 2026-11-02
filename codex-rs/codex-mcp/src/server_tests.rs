@@ -96,6 +96,23 @@ fn explicit_authorization_server() -> EffectiveMcpServer {
 }
 
 #[test]
+fn connection_identity_does_not_reuse_unprotected_processes() {
+    let context = runtime_context();
+    let server = EffectiveMcpServer::from_host_config(
+        serde_json::from_value(serde_json::json!({"command": "fixture"})).unwrap(),
+    );
+    let original = connection_identity(&server, &context);
+    let protected_context = context.with_process_read_only_paths(vec![
+        codex_config::AbsolutePathBuf::from_absolute_path(std::env::temp_dir()).unwrap(),
+    ]);
+    let protected = connection_identity(&server, &protected_context);
+    assert!(!original.has_same_connection_config(&protected));
+    assert!(
+        protected.has_same_connection_config(&connection_identity(&server, &protected_context))
+    );
+}
+
+#[test]
 fn connection_identity_does_not_reuse_connections_across_credential_policies() {
     let runtime_context = runtime_context();
     let host_server = explicit_authorization_server();

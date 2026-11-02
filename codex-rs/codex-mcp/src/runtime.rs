@@ -985,6 +985,7 @@ pub struct McpRuntimeContext {
     environment_selections: Arc<[TurnEnvironmentSelection]>,
     ready_environments: HashMap<String, Arc<Environment>>,
     local_process_cwd: PathBuf,
+    pub(crate) process_read_only_paths: Vec<codex_config::AbsolutePathBuf>,
     local_http_client: Arc<dyn HttpClient>,
 }
 
@@ -1034,13 +1035,28 @@ impl McpRuntimeContext {
             environment_selections: Arc::default(),
             ready_environments: HashMap::new(),
             local_process_cwd,
+            process_read_only_paths: Vec::new(),
             local_http_client,
         }
     }
 
     /// Uses this process's pool for compatible local stdio servers using MCP 2026-07-28.
     pub fn with_connection_pool(mut self, pool: McpConnectionPool) -> Self {
-        self.connection_pool = Some(pool);
+        if self.process_read_only_paths.is_empty() {
+            self.connection_pool = Some(pool);
+        }
+        self
+    }
+
+    /// Protected threads never reuse a host process started without their restrictions.
+    pub fn with_process_read_only_paths(
+        mut self,
+        paths: Vec<codex_config::AbsolutePathBuf>,
+    ) -> Self {
+        self.process_read_only_paths = paths;
+        if !self.process_read_only_paths.is_empty() {
+            self.connection_pool = None;
+        }
         self
     }
 
@@ -1117,6 +1133,17 @@ impl McpRuntimeContext {
             Some(environment) if environment.is_remote() => environment.get_http_client(),
             Some(_) | None => self.local_http_client(),
         };
+        if !self.process_read_only_paths.is_empty()
+            && matches!(
+                &config.transport,
+                codex_config::McpServerTransportConfig::StreamableHttp {
+                    http_headers_helper: Some(_),
+                    ..
+                }
+            )
+        {
+            return Err("HTTP headers helpers do not support process_read_only_paths".into());
+        }
         apply_http_headers_helper(client, config, self.local_process_cwd())
     }
 }
@@ -1346,6 +1373,49 @@ mod tests {
             environment_id: environment_id.to_string(),
             ..stdio_server(environment_id)
         }
+    }
+
+    #[test]
+    fn protected_processes_never_join_the_connection_pool() {
+        let context = McpRuntimeContext::new(
+            Arc::new(environment_manager_without_environments()),
+            std::env::temp_dir(),
+        );
+        let path = codex_config::AbsolutePathBuf::from_absolute_path(std::env::temp_dir()).unwrap();
+        let pool = McpConnectionPool::default();
+        let protected = context
+            .clone()
+            .with_connection_pool(pool.clone())
+            .with_process_read_only_paths(vec![path.clone()]);
+        assert!(protected.connection_pool.is_none());
+        let protected = context
+            .with_process_read_only_paths(vec![path])
+            .with_connection_pool(pool);
+        assert!(protected.connection_pool.is_none());
+    }
+
+    #[test]
+    fn protected_context_rejects_http_header_helper() {
+        let context = McpRuntimeContext::new(
+            Arc::new(environment_manager_without_environments()),
+            std::env::temp_dir(),
+        )
+        .with_process_read_only_paths(vec![
+            codex_config::AbsolutePathBuf::from_absolute_path(std::env::temp_dir()).unwrap(),
+        ]);
+        let mut config = http_server(DEFAULT_MCP_SERVER_ENVIRONMENT_ID);
+        let McpServerTransportConfig::StreamableHttp {
+            http_headers_helper,
+            ..
+        } = &mut config.transport
+        else {
+            unreachable!("HTTP fixture");
+        };
+        *http_headers_helper = Some("must-not-run".into());
+        assert!(
+            matches!(context.resolve_http_client("http", &config), Err(error)
+            if error == "HTTP headers helpers do not support process_read_only_paths")
+        );
     }
 
     #[test]

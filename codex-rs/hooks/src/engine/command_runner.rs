@@ -62,6 +62,7 @@ pub(crate) struct CommandHookRuntime {
     result_sender: Sender<HookCompletedEvent>,
     state: Arc<Mutex<CommandHookRuntimeState>>,
     output_spiller: HookOutputSpiller,
+    pub(crate) read_only_paths: Result<Vec<codex_utils_absolute_path::AbsolutePathBuf>, String>,
 }
 
 struct CommandHookRuntimeState {
@@ -92,6 +93,7 @@ impl CommandHookRuntime {
             result_sender,
             state: Arc::new(Mutex::new(CommandHookRuntimeState::default())),
             output_spiller: HookOutputSpiller::new(thread_id),
+            read_only_paths: Ok(Vec::new()),
         }
     }
 
@@ -109,6 +111,7 @@ impl CommandHookRuntime {
             result_sender: self.result_sender.clone(),
             state: Arc::clone(&self.state),
             output_spiller: self.output_spiller.clone(),
+            read_only_paths: self.read_only_paths.clone(),
         }
     }
 
@@ -247,6 +250,13 @@ pub(crate) async fn run_command(
     }
 
     if let super::HandlerSourcePath::Environment { environment_id, .. } = &handler.source_path {
+        if !matches!(&runtime.read_only_paths, Ok(paths) if paths.is_empty()) {
+            return finish_command_run(started_at, started, CommandRunCompletion {
+                exit_code: None, stdout: String::new(), stderr: String::new(),
+                error: Some("hook read-only paths cannot be enforced by the remote environment executor".into()),
+                outcome: "sandbox_error",
+            });
+        }
         let result = match &runtime.environment_executor {
             Some(executor) => {
                 executor
@@ -277,7 +287,46 @@ pub(crate) async fn run_command(
         };
     }
 
-    let mut command = build_command(&runtime.shell, command_line, &runtime.environment, env);
+    let protected_shell = runtime
+        .read_only_paths
+        .as_ref()
+        .map_err(|err| anyhow::anyhow!("{err}"))
+        .and_then(|paths| {
+            if paths.is_empty() {
+                return Ok(None);
+            }
+            let shell = if runtime.shell.program.is_empty() {
+                CommandShell {
+                    program: default_shell_program(&runtime.environment)
+                        .into_string()
+                        .map_err(|_| anyhow::anyhow!("hook shell path is not UTF-8"))?,
+                    args: vec!["-lc".into()],
+                }
+            } else {
+                CommandShell {
+                    program: runtime.shell.program.clone(),
+                    args: runtime.shell.args.clone(),
+                }
+            };
+            crate::sandbox::protected_shell(shell, cwd, paths).map(Some)
+        });
+    let shell = match &protected_shell {
+        Ok(shell) => shell.as_ref().unwrap_or(&runtime.shell),
+        Err(err) => {
+            return finish_command_run(
+                started_at,
+                started,
+                CommandRunCompletion {
+                    exit_code: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    error: Some(format!("hook sandbox preparation failed: {err}")),
+                    outcome: "sandbox_error",
+                },
+            );
+        }
+    };
+    let mut command = build_command(shell, command_line, &runtime.environment, env);
     command.current_dir(cwd);
 
     #[cfg(windows)]

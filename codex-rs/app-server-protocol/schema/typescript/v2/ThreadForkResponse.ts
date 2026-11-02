@@ -9,7 +9,11 @@ import type { AskForApproval } from "./AskForApproval";
 import type { SandboxPolicy } from "./SandboxPolicy";
 import type { Thread } from "./Thread";
 
-export type ThreadForkResponse = {thread: Thread, model: string, modelProvider: string, serviceTier: string | null, /**
+export type ThreadForkResponse = {/**
+ * Effective read-only paths for local subprocesses. Unlike tool sandbox
+ * settings, these restrictions are applied at the process execution boundary.
+ */
+processReadOnlyPaths?: Array<AbsolutePathBuf>, thread: Thread, model: string, modelProvider: string, serviceTier: string | null, /**
  * Saved list of disabled plugin IDs. Does not yet filter plugin capabilities.
  */
 disabledPluginIds: Array<string>, cwd: AbsolutePathBuf, /**

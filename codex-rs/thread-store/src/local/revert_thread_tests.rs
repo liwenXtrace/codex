@@ -103,6 +103,10 @@ async fn revert_keeps_thread_id_and_hides_suffix_across_repeated_reverts() {
     );
     assert_eq!(replacement_meta.memory_mode, None);
     assert_eq!(
+        replacement_meta.process_read_only_paths,
+        vec![home.path().join("source")]
+    );
+    assert_eq!(
         replacement_meta.runtime_workspace_roots,
         Some(vec![home.path().join("workspace")])
     );
@@ -277,7 +281,9 @@ async fn create_paginated_thread(store: &LocalThreadStore, thread_id: ThreadId) 
             creator_account_id: Some("creator-account".to_string()),
             session_id: thread_id.into(),
             thread_id,
-            extra_config: None,
+            extra_config: Some(crate::ExtraConfig {
+                process_read_only_paths: vec![store.config.codex_home.join("source").abs()],
+            }),
             forked_from_id: None,
             parent_thread_id: None,
             source: SessionSource::Exec,

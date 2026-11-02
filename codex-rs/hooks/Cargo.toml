@@ -20,6 +20,7 @@ chrono = { workspace = true, features = ["serde"] }
 codex-config = { workspace = true }
 codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
+codex-sandboxing = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-output-truncation = { workspace = true }
 codex-utils-path-uri = { workspace = true }

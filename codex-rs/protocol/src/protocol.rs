@@ -3416,6 +3416,10 @@ pub struct HistoryPosition {
 /// and should be used when there is no config override.
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct SessionMeta {
+    /// Sticky source-protection constraints for local subprocesses. Resume and
+    /// fork must restore these before any lifecycle hook or MCP server can execute.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub process_read_only_paths: Vec<PathBuf>,
     /// ChatGPT user that created this thread; absent when unavailable or for older threads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub creator_user_id: Option<String>,
@@ -3499,6 +3503,7 @@ impl Default for SessionMeta {
     fn default() -> Self {
         let id = ThreadId::default();
         SessionMeta {
+            process_read_only_paths: Vec::new(),
             creator_user_id: None,
             creator_account_id: None,
             session_id: id.into(),

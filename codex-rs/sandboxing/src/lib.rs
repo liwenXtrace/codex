@@ -8,6 +8,7 @@ pub mod policy_transforms;
 mod sandbox_integrity;
 #[cfg(target_os = "macos")]
 pub mod seatbelt;
+mod source_protection;
 mod spawn;
 mod terminal_queries;
 mod violation;
@@ -44,6 +45,7 @@ pub use manager::with_managed_mitm_ca_readable_root;
 pub use sandbox_integrity::FileContentsChecker;
 pub use sandbox_integrity::IntegrityFinding;
 pub use sandbox_integrity::IntegrityFindingDetails;
+pub use source_protection::protect_read_only_paths;
 pub use spawn::SpawnRequest;
 pub use spawn::WindowsSandboxSpawnRequest;
 pub use spawn::spawn_process;

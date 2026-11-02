@@ -651,6 +651,10 @@ pub struct ThreadForkParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadForkResponse {
+    /// Effective read-only paths for local subprocesses. Unlike tool sandbox
+    /// settings, these restrictions are applied at the process execution boundary.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub process_read_only_paths: Vec<AbsolutePathBuf>,
     pub thread: Thread,
     pub model: String,
     pub model_provider: String,

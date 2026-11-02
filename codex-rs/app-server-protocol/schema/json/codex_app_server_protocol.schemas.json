@@ -22754,6 +22754,13 @@
           "modelProvider": {
             "type": "string"
           },
+          "processReadOnlyPaths": {
+            "description": "Effective read-only paths for local subprocesses. Unlike tool sandbox settings, these restrictions are applied at the process execution boundary.",
+            "items": {
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
+            },
+            "type": "array"
+          },
           "reasoningEffort": {
             "anyOf": [
               {

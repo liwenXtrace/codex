@@ -727,6 +727,7 @@ fn sample_thread_resume_response() -> ClientResponsePayload {
 
 fn sample_thread_fork_response() -> ClientResponsePayload {
     ClientResponsePayload::ThreadFork(ThreadForkResponse {
+        process_read_only_paths: Vec::new(),
         disabled_plugin_ids: Vec::new(),
         thread: sample_thread("thread-3"),
         model: "gpt-5".to_string(),

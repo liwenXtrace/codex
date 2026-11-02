@@ -318,6 +318,7 @@ impl StdioServerCommand {
 #[derive(Clone)]
 pub struct LocalStdioServerLauncher {
     fallback_cwd: PathBuf,
+    read_only_paths: Vec<codex_utils_absolute_path::AbsolutePathBuf>,
 }
 
 impl LocalStdioServerLauncher {
@@ -326,7 +327,20 @@ impl LocalStdioServerLauncher {
     /// `fallback_cwd` is used when the MCP server config omits `cwd`, so
     /// relative commands resolve from the caller's runtime working directory.
     pub fn new(fallback_cwd: PathBuf) -> Self {
-        Self { fallback_cwd }
+        Self {
+            fallback_cwd,
+            read_only_paths: Vec::new(),
+        }
+    }
+}
+
+impl LocalStdioServerLauncher {
+    pub fn with_read_only_paths(
+        mut self,
+        paths: Vec<codex_utils_absolute_path::AbsolutePathBuf>,
+    ) -> Self {
+        self.read_only_paths = paths;
+        self
     }
 }
 
@@ -336,11 +350,12 @@ impl StdioServerLauncher for LocalStdioServerLauncher {
         command: StdioServerCommand,
     ) -> BoxFuture<'static, io::Result<StdioServerTransport>> {
         let fallback_cwd = self.fallback_cwd.clone();
+        let read_only_paths = self.read_only_paths.clone();
         async move {
             // Cancel queued launches when startup is dropped. A worker that already started
             // drops its transport and cleans up the child when it finishes.
             AbortOnDropHandle::new(tokio::task::spawn_blocking(move || {
-                Self::launch_server(command, fallback_cwd)
+                Self::launch_server(command, fallback_cwd, read_only_paths)
             }))
             .await
             .map_err(io::Error::other)?
@@ -451,6 +466,7 @@ impl LocalStdioServerLauncher {
     fn launch_server(
         command: StdioServerCommand,
         fallback_cwd: PathBuf,
+        read_only_paths: Vec<codex_utils_absolute_path::AbsolutePathBuf>,
     ) -> io::Result<StdioServerTransport> {
         let StdioServerCommand {
             program,
@@ -467,6 +483,31 @@ impl LocalStdioServerLauncher {
         let resolved_program =
             program_resolver::resolve(program, &envs, &cwd).map_err(io::Error::other)?;
 
+        let (resolved_program, args) = if read_only_paths.is_empty() {
+            (resolved_program, args)
+        } else {
+            let program = resolved_program
+                .into_string()
+                .map_err(|_| io::Error::other("protected MCP executable must be UTF-8"))?;
+            let args = args
+                .into_iter()
+                .map(|arg| {
+                    arg.into_string()
+                        .map_err(|_| io::Error::other("protected MCP arguments must be UTF-8"))
+                })
+                .collect::<io::Result<Vec<_>>>()?;
+            let mut protected =
+                codex_sandboxing::protect_read_only_paths(program, args, &cwd, &read_only_paths)
+                    .map_err(io::Error::other)?
+                    .into_iter();
+            let program = protected
+                .next()
+                .ok_or_else(|| io::Error::other("empty protected MCP command"))?;
+            (
+                OsString::from(program),
+                protected.map(OsString::from).collect(),
+            )
+        };
         let build_command = || {
             let mut command = Command::new(&resolved_program);
             command.current_dir(&cwd).envs(&envs).args(&args);
@@ -1035,6 +1076,57 @@ mod tests {
     use codex_protocol::config_types::ShellEnvironmentPolicy;
     use codex_protocol::shell_environment;
     use pretty_assertions::assert_eq;
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn protected_stdio_launch_blocks_descendant_source_writes() -> Result<()> {
+        let temporary = tempfile::tempdir()?;
+        let source = temporary.path().join("source");
+        let branch = temporary.path().join("branch");
+        std::fs::create_dir_all(&source)?;
+        std::fs::create_dir_all(&branch)?;
+        let script = r#"
+import os, subprocess, sys
+from pathlib import Path
+child = subprocess.run([sys.executable, '-c', 'from pathlib import Path; import sys; Path(sys.argv[1]).write_text("escaped")', sys.argv[1]], capture_output=True)
+assert child.returncode != 0 and b'PermissionError' in child.stderr, child.stderr
+Path('result').write_text(os.environ['SOURCE_GUARD_MARKER'])
+sys.stdin.read()
+"#;
+        let launcher = LocalStdioServerLauncher::new(branch.clone()).with_read_only_paths(vec![
+            codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&source)?,
+        ]);
+        let transport = launcher
+            .launch(StdioServerCommand::new(
+                OsString::from("python3"),
+                vec![
+                    OsString::from("-c"),
+                    OsString::from(script),
+                    source.join("forbidden").into_os_string(),
+                ],
+                Some(HashMap::from([(
+                    OsString::from("SOURCE_GUARD_MARKER"),
+                    OsString::from("preserved"),
+                )])),
+                Vec::new(),
+                None,
+                McpProtocolMode::Legacy,
+            ))
+            .await?;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while std::fs::read_to_string(branch.join("result"))
+                .ok()
+                .as_deref()
+                != Some("preserved")
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await?;
+        assert!(!source.join("forbidden").exists());
+        drop(transport);
+        Ok(())
+    }
 
     #[test]
     fn remote_env_policy_uses_core_env_without_remote_source_vars() {

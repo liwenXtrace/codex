@@ -65,7 +65,7 @@ pub struct Hooks {
     // TODO: Once legacy `notify` is removed, capture this snapshot in `CommandHookRuntime::new`
     // and remove the environment plumbing from `Hooks` and `from_config`.
     environment: Arc<Vec<(OsString, OsString)>>,
-    after_agent: Arc<[Hook]>,
+    legacy_notify_argv: Option<Vec<String>>,
     engine: ClaudeHooksEngine,
     plugin_hook_sources: Arc<[PluginHookSource]>,
     plugin_hook_load_warnings: Arc<[String]>,
@@ -176,16 +176,26 @@ impl Hooks {
         environment: Arc<Vec<(OsString, OsString)>>,
         build_runtime: impl FnOnce(CommandShell) -> CommandHookRuntime,
     ) -> Self {
-        let after_agent = config
+        let read_only_paths = crate::sandbox::configured_paths(config.config_layer_stack.as_ref());
+        let legacy_notify_argv = config
             .legacy_notify_argv
-            .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
-            .map(|argv| crate::legacy_notify::notify_hook(argv, Arc::clone(&environment)))
-            .into_iter()
-            .collect();
-        let command_runtime = build_runtime(CommandShell {
+            .filter(|argv| !argv.is_empty() && !argv[0].is_empty());
+        let mut command_runtime = build_runtime(CommandShell {
             program: config.shell_program.unwrap_or_default(),
             args: config.shell_args,
         });
+        // Refresh must not relax protection for an already-running thread or its
+        // asynchronous hooks. Malformed configuration remains an execution error.
+        command_runtime.read_only_paths =
+            command_runtime.read_only_paths.and_then(|mut existing| {
+                let new_paths = read_only_paths?;
+                for path in new_paths {
+                    if !existing.contains(&path) {
+                        existing.push(path);
+                    }
+                }
+                Ok(existing)
+            });
         let engine = ClaudeHooksEngine::new(
             config.feature_enabled,
             config.bypass_hook_trust,
@@ -197,10 +207,30 @@ impl Hooks {
         );
         Self {
             environment,
-            after_agent,
+            legacy_notify_argv,
             engine,
             plugin_hook_sources: config.plugin_hook_sources.into(),
             plugin_hook_load_warnings: config.plugin_hook_load_warnings.into(),
+        }
+    }
+
+    /// Return the read-only carveouts actually retained by the command runtime.
+    pub fn command_read_only_paths(&self) -> Vec<codex_utils_absolute_path::AbsolutePathBuf> {
+        self.engine
+            .command_runtime
+            .read_only_paths
+            .clone()
+            .unwrap_or_default()
+    }
+
+    /// Restore persisted constraints before dispatching any startup hooks.
+    pub fn retain_read_only_paths(&mut self, paths: &[codex_utils_absolute_path::AbsolutePathBuf]) {
+        if let Ok(existing) = &mut self.engine.command_runtime.read_only_paths {
+            for path in paths {
+                if !existing.contains(path) {
+                    existing.push(path.clone());
+                }
+            }
         }
     }
 
@@ -213,9 +243,20 @@ impl Hooks {
         self.engine.warnings()
     }
 
-    fn hooks_for_event(&self, hook_event: &HookEvent) -> &[Hook] {
+    fn hooks_for_event(&self, hook_event: &HookEvent) -> Vec<Hook> {
         match hook_event {
-            HookEvent::AfterAgent { .. } => &self.after_agent,
+            HookEvent::AfterAgent { .. } => self
+                .legacy_notify_argv
+                .clone()
+                .map(|argv| {
+                    crate::legacy_notify::notify_hook(
+                        argv,
+                        Arc::clone(&self.environment),
+                        self.engine.command_runtime.read_only_paths.clone(),
+                    )
+                })
+                .into_iter()
+                .collect(),
         }
     }
 

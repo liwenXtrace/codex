@@ -2,6 +2,7 @@ use std::ffi::OsString;
 use std::process::Stdio;
 use std::sync::Arc;
 
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Serialize;
 
 use crate::Hook;
@@ -42,14 +43,35 @@ pub fn legacy_notify_json(payload: &HookPayload) -> Result<String, serde_json::E
 }
 
 // TODO: Remove this hook and its environment plumbing when legacy `notify` support is removed.
-pub(crate) fn notify_hook(argv: Vec<String>, environment: Arc<Vec<(OsString, OsString)>>) -> Hook {
+pub(crate) fn notify_hook(
+    argv: Vec<String>,
+    environment: Arc<Vec<(OsString, OsString)>>,
+    read_only_paths: Result<Vec<AbsolutePathBuf>, String>,
+) -> Hook {
     let argv = Arc::new(argv);
     Hook {
         name: "legacy_notify".to_string(),
         func: Arc::new(move |payload: &HookPayload| {
             let argv = Arc::clone(&argv);
             let environment = Arc::clone(&environment);
+            let read_only_paths = read_only_paths.clone();
             Box::pin(async move {
+                let paths = match read_only_paths {
+                    Ok(paths) => paths,
+                    Err(error) => return HookResult::FailedContinue(anyhow::anyhow!(error).into()),
+                };
+                let argv = match argv.split_first() {
+                    Some((program, args)) => match codex_sandboxing::protect_read_only_paths(
+                        program.clone(),
+                        args.to_vec(),
+                        payload.cwd.as_path(),
+                        &paths,
+                    ) {
+                        Ok(argv) => argv,
+                        Err(error) => return HookResult::FailedContinue(error.into()),
+                    },
+                    None => return HookResult::Success,
+                };
                 let mut command = match command_from_argv(&argv, environment.iter().cloned()) {
                     Some(command) => command,
                     None => return HookResult::Success,
@@ -97,6 +119,52 @@ mod tests {
             "input-messages": ["Rename `foo` to `bar` and update the callsites."],
             "last-assistant-message": "Rename complete and verified `cargo build` succeeds.",
         })
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn notify_preserves_payload_but_denies_source_writes() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let source = dir.path().join("source");
+        let branch = dir.path().join("branch");
+        std::fs::create_dir_all(&source)?;
+        std::fs::create_dir_all(&branch)?;
+        let result = branch.join("result");
+        let script = format!(
+            "if /bin/sh -c 'echo escaped > \"$1/forbidden\"' child \"{}\"; then exit 99; fi; printf '%s' \"$1\" > \"{}\"",
+            source.display(),
+            result.display()
+        );
+        let hook = notify_hook(
+            vec!["/bin/sh".into(), "-c".into(), script, "notify".into()],
+            Arc::new(Vec::new()),
+            Ok(vec![AbsolutePathBuf::from_absolute_path(&source)?]),
+        );
+        let payload = HookPayload {
+            session_id: ThreadId::new(),
+            cwd: AbsolutePathBuf::from_absolute_path(&branch)?,
+            client: None,
+            triggered_at: chrono::Utc::now(),
+            hook_event: HookEvent::AfterAgent {
+                event: HookEventAfterAgent {
+                    thread_id: ThreadId::new(),
+                    turn_id: "protected".into(),
+                    input_messages: vec!["notify".into()],
+                    last_assistant_message: Some("done".into()),
+                },
+            },
+        };
+        assert!(matches!((hook.func)(&payload).await, HookResult::Success));
+        let expected = legacy_notify_json(&payload)?;
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while std::fs::read_to_string(&result).ok().as_ref() != Some(&expected) {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await?;
+        assert!(!source.join("forbidden").exists());
+        assert_eq!(std::fs::read_to_string(result)?, expected);
+        Ok(())
     }
 
     #[test]

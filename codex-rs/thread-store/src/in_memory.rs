@@ -585,6 +585,17 @@ impl InMemoryThreadStore {
         let mut state = self.state.lock().await;
         state.calls.create_thread += 1;
         let session_meta = SessionMeta {
+            process_read_only_paths: params
+                .extra_config
+                .as_ref()
+                .map(|extra| {
+                    extra
+                        .process_read_only_paths
+                        .iter()
+                        .map(AbsolutePathBuf::to_path_buf)
+                        .collect()
+                })
+                .unwrap_or_default(),
             attached_thread: params.attached_thread,
             session_id: params.session_id,
             id: params.thread_id,

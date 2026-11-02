@@ -824,7 +824,7 @@ impl Session {
         attached_thread: bool,
         prompt_cache_key: PromptCacheKey,
         environment_selections: &[TurnEnvironmentSelection],
-        config: Arc<Config>,
+        mut config: Arc<Config>,
         mut instructions: SessionInstructions,
         installation_id: String,
         auth_manager: Arc<AuthManager>,
@@ -868,6 +868,29 @@ impl Session {
                 .model(),
             session_configuration.provider
         );
+        let mut process_read_only_paths = config
+            .extra_config
+            .as_ref()
+            .map(|extra| extra.process_read_only_paths.clone())
+            .unwrap_or_default();
+        for item in initial_history.get_rollout_items() {
+            if let RolloutItem::SessionMeta(meta) = item {
+                for path in &meta.meta.process_read_only_paths {
+                    let path = AbsolutePathBuf::from_absolute_path(path)?;
+                    if !process_read_only_paths.contains(&path) {
+                        process_read_only_paths.push(path);
+                    }
+                }
+            }
+        }
+        if !process_read_only_paths.is_empty() {
+            // Child agents inherit the effective config, including constraints
+            // recovered from history rather than current config files.
+            Arc::make_mut(&mut config).extra_config = Some(codex_thread_store::ExtraConfig {
+                process_read_only_paths: process_read_only_paths.clone(),
+            });
+            session_configuration.original_config_do_not_use = Arc::clone(&config);
+        }
         let base_instructions_provenance = if config.base_instructions.is_some() {
             Some(
                 config
@@ -1102,7 +1125,11 @@ impl Session {
                             creator_account_id: auth.as_ref().and_then(CodexAuth::get_account_id),
                             session_id,
                             thread_id,
-                            extra_config: config.extra_config.clone(),
+                            extra_config: (!process_read_only_paths.is_empty()).then(|| {
+                                codex_thread_store::ExtraConfig {
+                                    process_read_only_paths: process_read_only_paths.clone(),
+                                }
+                            }),
                             forked_from_id,
                             parent_thread_id,
                             source: session_source,
@@ -1672,7 +1699,7 @@ impl Session {
                 &session_configuration.disabled_plugin_ids,
             )
             .await;
-            let (hooks, async_hook_results) = Hooks::new(
+            let (mut hooks, async_hook_results) = Hooks::new(
                 hooks_config,
                 thread_id,
                 Arc::new(CoreHookMcpExecutor {
@@ -1680,6 +1707,7 @@ impl Session {
                     thread_id,
                 }),
             )?;
+            hooks.retain_read_only_paths(&process_read_only_paths);
             for warning in hooks.startup_warnings() {
                 post_session_configured_events.push(Event {
                     id: INITIAL_SUBMIT_ID.to_owned(),

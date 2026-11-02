@@ -1153,6 +1153,11 @@ impl CodexThread {
         self.session.hooks().list_with_environment_hooks(sources)
     }
 
+    /// Effective read-only carveouts retained by the local command-hook runtime.
+    pub fn process_read_only_paths(&self) -> Vec<codex_utils_absolute_path::AbsolutePathBuf> {
+        self.session.hooks().command_read_only_paths()
+    }
+
     /// Observes this thread's published MCP connections that match the requested config.
     pub async fn mcp_connection_statuses(
         &self,

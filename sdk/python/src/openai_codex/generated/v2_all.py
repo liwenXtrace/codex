@@ -13063,6 +13063,13 @@ class ThreadForkResponse(BaseModel):
     ] = []
     model: str
     model_provider: Annotated[str, Field(alias="modelProvider")]
+    process_read_only_paths: Annotated[
+        list[AbsolutePathBuf] | None,
+        Field(
+            alias="processReadOnlyPaths",
+            description="Effective read-only paths for local subprocesses. Unlike tool sandbox settings, these restrictions are applied at the process execution boundary.",
+        ),
+    ] = None
     reasoning_effort: Annotated[ReasoningEffort | None, Field(alias="reasoningEffort")] = None
     sandbox: Annotated[
         SandboxPolicy,

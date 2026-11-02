@@ -8502,6 +8502,13 @@
       "default": {},
       "description": "Default and per-plugin settings keyed by exact `<plugin>@<marketplace>` IDs."
     },
+    "process_read_only_paths": {
+      "description": "Read-only paths for local command hooks, legacy notifications and stdio MCP processes.",
+      "items": {
+        "$ref": "#/definitions/AbsolutePathBuf"
+      },
+      "type": "array"
+    },
     "profile": {
       "description": "Profile to use from the `profiles` map.",
       "type": "string"

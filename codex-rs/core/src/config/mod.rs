@@ -4649,7 +4649,9 @@ impl Config {
             history,
             ephemeral: ephemeral.unwrap_or_default(),
             allow_persistent_dynamic_tool_updates: false,
-            extra_config: None,
+            extra_config: (!cfg.process_read_only_paths.is_empty()).then(|| ExtraConfig {
+                process_read_only_paths: cfg.process_read_only_paths.clone(),
+            }),
             bypass_hook_trust,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             codex_self_exe,

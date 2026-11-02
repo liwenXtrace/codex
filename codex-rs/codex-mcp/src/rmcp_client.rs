@@ -1501,10 +1501,16 @@ pub(crate) async fn make_rmcp_client(
                 // TODO(starr): Unify local stdio MCP launch with
                 // `ExecutorStdioServerLauncher` once the executor-backed path
                 // preserves `LocalStdioServerLauncher` semantics.
-                Arc::new(LocalStdioServerLauncher::new(
-                    runtime_context.local_process_cwd(),
-                )) as Arc<dyn StdioServerLauncher>
+                Arc::new(
+                    LocalStdioServerLauncher::new(runtime_context.local_process_cwd())
+                        .with_read_only_paths(runtime_context.process_read_only_paths.clone()),
+                ) as Arc<dyn StdioServerLauncher>
             } else {
+                if !runtime_context.process_read_only_paths.is_empty() {
+                    return Err(StartupOutcomeError::from(anyhow!(
+                        "remote stdio MCP does not support process_read_only_paths"
+                    )));
+                }
                 let Some(environment) = resolved_environment.as_ref() else {
                     unreachable!(
                         "non-local stdio MCP servers resolve an environment before launch"
